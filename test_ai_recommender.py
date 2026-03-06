@@ -17,16 +17,14 @@ def test_strict_json_schema():
     Test 1: Format Compliance
     Verifies the LLM strictly adheres to the requested JSON schema and does not return conversational text.
     """
-    # A complex query to test if the model gets confused
     query = "A philosophical story about an amnesiac detective solving a crime."
-    
-    result_str = get_movie_recommendation(query)
     
     # Assert 1: The output must be perfectly parseable JSON
     try:
-        result_json = json.loads(result_str)
+        # The function in app.py parses the JSON. If it fails, it throws the DecodeError here.
+        result_json = get_movie_recommendation(query)
     except json.JSONDecodeError:
-        pytest.fail(f"Test Failed: LLM output was not valid JSON. Output was: {result_str}")
+        pytest.fail("Test Failed: LLM output was not valid JSON.")
         
     # Assert 2: The JSON must contain exactly these three keys
     assert "title" in result_json, "Missing 'title' key in LLM output"
@@ -40,9 +38,8 @@ def test_hallucination_llm_judge():
     """
     query = "A contemplative movie about a Tokyo toilet cleaner's daily routine."
     
-    # 1. Get the target output
-    result_str = get_movie_recommendation(query)
-    result_json = json.loads(result_str)
+    # 1. Get the target output (it is already a dictionary)
+    result_json = get_movie_recommendation(query)
     
     movie_title = result_json.get("title")
     director = result_json.get("director")
