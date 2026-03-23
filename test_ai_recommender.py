@@ -1,22 +1,50 @@
 import os
-
 import pytest
 from dotenv import load_dotenv
 from google import genai
+from fastapi.testclient import TestClient
 
 from app import create_movie_chat, movie_assistant_turn
+from main import app as fastapi_app
 
 load_dotenv()
 api_key = os.environ.get("GEMINI_API_KEY")
 if not api_key:
     raise ValueError("GEMINI_API_KEY environment variable not set.")
-client = genai.Client(api_key=api_key)
+
+# Rename the client slightly to avoid conflicts with the TestClient
+genai_client = genai.Client(api_key=api_key)
+
+# Initialize the FastAPI test client to test main.py
+api_client = TestClient(fastapi_app)
 
 _CLARIFY_REPLY = (
     "I am flexible—pick specific films you are confident about. "
     "Return recommendations with exact titles and director names."
 )
 
+def test_api_health():
+    """
+    FastAPI Integration: Verify the health endpoint is responsive.
+    """
+    response = api_client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+def test_api_chat_endpoint():
+    """
+    FastAPI Integration: Verify the POST /chat endpoint successfully processes a 
+    message and returns the expected session_id and result payload.
+    """
+    payload = {"message": "A fast-paced sci-fi action movie set in space."}
+    response = api_client.post("/chat", json=payload)
+    
+    assert response.status_code == 200, f"API Error: {response.text}"
+    data = response.json()
+    
+    assert "session_id" in data
+    assert "result" in data
+    assert data["result"]["status"] in ["success", "clarifying"]
 
 def chat_until_success(initial_message: str, max_turns: int = 8) -> dict:
     """
@@ -40,7 +68,6 @@ def chat_until_success(initial_message: str, max_turns: int = 8) -> dict:
         pytest.fail(f"Unexpected status {status!r}: {result!r}")
     pytest.fail(f"No success after {max_turns} turns (last message was {message!r})")
 
-
 def test_strict_json_schema():
     """
     Format compliance: model eventually returns the success envelope with a movies list
@@ -61,7 +88,6 @@ def test_strict_json_schema():
             assert key in m, f"movies[{i}] missing '{key}'"
             assert m[key], f"movies[{i}].{key} must be non-empty"
 
-
 def test_hallucination_llm_judge():
     """
     LLM-as-a-Judge: first recommended film should look like a real title + director pair.
@@ -78,7 +104,7 @@ def test_hallucination_llm_judge():
     Respond ONLY with the word 'YES' if it is a real movie by that director, or 'NO' if it is made up or incorrect.
     """
 
-    judge_response = client.models.generate_content(
+    judge_response = genai_client.models.generate_content(
         model="gemini-2.5-flash",
         contents=judge_prompt,
     ).text.strip().upper()
@@ -86,3 +112,30 @@ def test_hallucination_llm_judge():
     assert "YES" in judge_response, (
         f"Hallucination Detected! The AI made up the movie '{movie_title}' by '{director}'."
     )
+
+def test_fallback_circuit_breaker():
+    """
+    AI Edge Case: Test that the AI respects the fallback rule and stops asking 
+    clarifying questions after a maximum of 2 vague responses, returning a success payload.
+    """
+    chat = create_movie_chat()
+    
+    # Turn 1: Extremely vague prompt
+    res1 = movie_assistant_turn(chat, "Recommend me a movie")
+    if res1.get("status") == "success":
+        return  # Triggered success immediately, which is acceptable
+        
+    assert res1.get("status") == "clarifying"
+    
+    # Turn 2: Passive/Vague reply
+    res2 = movie_assistant_turn(chat, "I don't know, surprise me")
+    if res2.get("status") == "success":
+        return  # Triggered fallback early
+        
+    assert res2.get("status") == "clarifying"
+    
+    # Turn 3: Final vague reply. This MUST trigger the fallback rule.
+    res3 = movie_assistant_turn(chat, "anything is fine")
+    assert res3.get("status") == "success", "AI failed the circuit breaker and asked a 3rd question."
+    assert "movies" in res3
+    assert len(res3["movies"]) >= 1
