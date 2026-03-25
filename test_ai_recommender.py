@@ -139,3 +139,50 @@ def test_fallback_circuit_breaker():
     assert res3.get("status") == "success", "AI failed the circuit breaker and asked a 3rd question."
     assert "movies" in res3
     assert len(res3["movies"]) >= 1
+    
+def test_api_streaming_link_integration():
+    """
+    FastAPI Integration: Verify the BFF orchestration logic.
+    When the AI returns a success payload, the backend must inject the 
+    'streamingLink' key into each movie object via TMDB.
+    """
+    # Ask for a very specific, famous movie guaranteed to trigger a 'success' state immediately
+    payload = {"message": "I want to watch the 1999 sci-fi movie The Matrix directed by the Wachowskis."}
+    response = api_client.post("/chat", json=payload)
+    
+    assert response.status_code == 200
+    data = response.json()
+    result = data.get("result", {})
+    
+    # We expect a success status based on the highly specific prompt
+    if result.get("status") == "success":
+        movies = result.get("movies", [])
+        assert len(movies) > 0
+        for i, movie in enumerate(movies):
+            # Assert that the new TMDB logic added the key (even if the link itself is None)
+            assert "streamingLink" in movie, f"Orchestrator failed to inject 'streamingLink' into movie[{i}]"
+            
+def test_api_session_memory():
+    """
+    FastAPI Integration: Verify that passing the session_id retains conversation history.
+    """
+    # Turn 1: Establish context
+    res1 = api_client.post("/chat", json={"message": "I only like movies directed by Christopher Nolan."})
+    assert res1.status_code == 200
+    session_id = res1.json().get("session_id")
+    assert session_id is not None
+    
+    # Turn 2: Use the exact same session ID and use a pronoun ("his")
+    res2 = api_client.post("/chat", json={
+        "session_id": session_id,
+        "message": "Recommend me his Batman movie."
+    })
+    assert res2.status_code == 200
+    data2 = res2.json()
+    
+    # The AI should know "his" refers to Nolan from the previous turn memory
+    result2 = data2.get("result", {})
+    if result2.get("status") == "success":
+        movies = result2.get("movies", [])
+        title_found = any("Dark Knight" in m["title"] or "Batman Begins" in m["title"] for m in movies)
+        assert title_found, "The API failed to retain session context; the AI forgot who the director was!"
