@@ -15,7 +15,6 @@ This API operates on a **Zero-Trust Server-to-Server Proxy Architecture**. Multi
 | **Auth** | `x-api-key` header validation | Blocks direct browser/Postman access with `403 Forbidden` |
 | **Rate Limiting** | `slowapi` — 20 req/min per IP | Prevents DoS attacks |
 | **Payload Size** | Pydantic — max 1,000 chars | Rejects bloated prompts with `422 Unprocessable Entity` |
-| **CORS** | Env-based origin allowlist | Prevents CSRF |
 | **Circuit Breaker** | Clarification turn limit | Forces a recommendation to stop infinite loops |
 
 ---
