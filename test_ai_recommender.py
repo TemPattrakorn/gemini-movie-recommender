@@ -25,6 +25,11 @@ _CLARIFY_REPLY = (
     "Return recommendations with exact titles and director names."
 )
 
+# Define the security headers required to pass the FastAPI proxy gate
+TEST_HEADERS = {
+    "x-api-key": os.environ.get("API_SECRET_KEY", "my-local-secret")
+}
+
 # =====================================================================
 # HELPER FUNCTIONS
 # =====================================================================
@@ -77,33 +82,30 @@ def test_rate_limiter_blocks_after_20_requests():
     with patch("main.movie_assistant_turn") as mock_ai:
         mock_ai.return_value = {"status": "clarifying", "message": "Mocked response"}
 
-        # Execute 20 authorized requests
+        # Execute 20 authorized requests (Include headers)
         for _ in range(20):
-            response = spoofed_client.post("/chat", json=payload)
+            response = spoofed_client.post("/chat", json=payload, headers=TEST_HEADERS)
             assert response.status_code == 200
 
         # Verify the 21st request is explicitly blocked
-        blocked_response = spoofed_client.post("/chat", json=payload)
+        blocked_response = spoofed_client.post("/chat", json=payload, headers=TEST_HEADERS)
         assert blocked_response.status_code == 429
         
         error_data = blocked_response.json()
         assert "Rate limit exceeded" in str(error_data)
-        
+
 def test_payload_size_limit_rejection():
     """
     Security Verification: Ensure the API rejects massive payloads to prevent 
     memory exhaustion and parsing crashes.
     """
-    # Create a string that is exactly 1 character over the 1000-character limit
     massive_payload = {"message": "A" * 1001}
     
-    response = api_client.post("/chat", json=massive_payload)
+    # Must include headers so it passes the auth gate to hit the payload validation
+    response = api_client.post("/chat", json=massive_payload, headers=TEST_HEADERS)
     
-    # Verify FastAPI's automatic validation caught it (422 Unprocessable Entity)
     assert response.status_code == 422, "Security vulnerability: Payload size limit failed!"
-    
     error_data = response.json()
-    # Verify the error message specifically mentions the length constraint
     assert "String should have at most 1000 characters" in str(error_data)
 
 # =====================================================================
@@ -112,7 +114,7 @@ def test_payload_size_limit_rejection():
 
 def test_api_chat_endpoint():
     """Verify the /chat endpoint successfully processes inputs and yields valid session data."""
-    response = api_client.post("/chat", json={"message": "A sci-fi action movie set in space."})
+    response = api_client.post("/chat", json={"message": "A sci-fi action movie set in space."}, headers=TEST_HEADERS)
     assert response.status_code == 200
     
     data = response.json()
@@ -122,12 +124,12 @@ def test_api_chat_endpoint():
 def test_api_session_memory():
     """Verify the backend successfully maintains conversational context across requests."""
     # Establish context
-    res1 = api_client.post("/chat", json={"message": "I only like movies directed by Christopher Nolan."})
+    res1 = api_client.post("/chat", json={"message": "I only like movies directed by Christopher Nolan."}, headers=TEST_HEADERS)
     assert res1.status_code == 200
     session_id = res1.json().get("session_id")
     
     # Follow-up request utilizing pronoun resolution
-    res2 = api_client.post("/chat", json={"session_id": session_id, "message": "Recommend me his Batman movie."})
+    res2 = api_client.post("/chat", json={"session_id": session_id, "message": "Recommend me his Batman movie."}, headers=TEST_HEADERS)
     assert res2.status_code == 200
     
     result2 = res2.json().get("result", {})
@@ -139,7 +141,7 @@ def test_api_session_memory():
 def test_api_streaming_link_integration():
     """Verify the BFF orchestrator successfully injects TMDB streaming links into the AI payload."""
     payload = {"message": "I want to watch the 1999 sci-fi movie The Matrix directed by the Wachowskis."}
-    response = api_client.post("/chat", json=payload)
+    response = api_client.post("/chat", json=payload, headers=TEST_HEADERS)
     
     assert response.status_code == 200
     result = response.json().get("result", {})
