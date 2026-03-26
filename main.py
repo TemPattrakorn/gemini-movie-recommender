@@ -6,7 +6,6 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Security, Depends
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field
 
@@ -31,19 +30,6 @@ app = FastAPI(title="Gemini Movie Recommender API")
 # Register rate limiter exception handler
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-# Configure CORS
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
-_cors = os.environ.get("CORS_ORIGINS", FRONTEND_URL)
-_origins = [o.strip() for o in _cors.split(",") if o.strip()]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_origins if _origins else ["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # =====================================================================
 # SECURITY & DEPENDENCIES
