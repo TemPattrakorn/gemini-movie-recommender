@@ -147,6 +147,12 @@ x-api-key: <YOUR_API_SECRET_KEY>
 
 ---
 
+## 🤝 Ecosystem
+
+This backend is designed to work exclusively with the [Gemini Movie Recommender Frontend](https://github.com/TemPattrakorn/gemini-movie-frontend). Refer to that repository for frontend setup, API reference, and security documentation.
+
+---
+
 ## 📄 License
 
 This project is licensed under the MIT License. See [`LICENSE`](./LICENSE) for details.
