@@ -5,8 +5,9 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Security, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field
 
 # Rate limiting imports
@@ -17,6 +18,10 @@ from slowapi.errors import RateLimitExceeded
 from app import create_movie_chat, movie_assistant_turn
 
 load_dotenv()
+
+# =====================================================================
+# APPLICATION & MIDDLEWARE SETUP
+# =====================================================================
 
 # Initialize IP-based rate limiter
 limiter = Limiter(key_func=get_remote_address)
@@ -40,20 +45,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# =====================================================================
+# SECURITY & DEPENDENCIES
+# =====================================================================
+
+api_key_header = APIKeyHeader(name="x-api-key", auto_error=True)
+
+def verify_api_key(api_key: str = Security(api_key_header)) -> str:
+    """Validate incoming requests against the shared backend-to-frontend secret."""
+    expected_key = os.environ.get("API_SECRET_KEY", "my-local-secret")
+    if api_key != expected_key:
+        raise HTTPException(status_code=403, detail="Forbidden: Invalid API Key")
+    return api_key
+
+# =====================================================================
+# STATE MANAGEMENT & MODELS
+# =====================================================================
+
 _sessions: dict[str, Any] = {}
 _session_lock = asyncio.Lock()
-
 
 class ChatRequest(BaseModel):
     session_id: str | None = None
     # Enforce a 1000-character limit to prevent payload bloat
     message: str = Field(..., min_length=1, max_length=1000)
 
-
 class ChatResponse(BaseModel):
     session_id: str
     result: dict[str, Any]
 
+# =====================================================================
+# EXTERNAL INTEGRATIONS
+# =====================================================================
 
 async def fetch_streaming_link(title: str) -> str | None:
     """Fetch JustWatch links concurrently via TMDB API."""
@@ -61,7 +84,6 @@ async def fetch_streaming_link(title: str) -> str | None:
     if not tmdb_key:
         return None
 
-    # Async HTTP client
     async with httpx.AsyncClient() as client:
         try:
             # Search movie ID
@@ -92,6 +114,9 @@ async def fetch_streaming_link(title: str) -> str | None:
             print(f"Error fetching TMDB data for {title}: {e}")
             return None
 
+# =====================================================================
+# API ROUTES
+# =====================================================================
 
 @app.get("/health")
 async def health() -> dict[str, str]:
@@ -100,7 +125,11 @@ async def health() -> dict[str, str]:
 
 @app.post("/chat", response_model=ChatResponse)
 @limiter.limit("20/minute") # Limit: 20 requests/minute per IP
-async def chat(request: Request, req: ChatRequest) -> ChatResponse:
+async def chat(
+    request: Request, 
+    req: ChatRequest, 
+    api_key: str = Depends(verify_api_key)  # Injects the security check
+) -> ChatResponse:
     async with _session_lock:
         sid = req.session_id
         if sid and sid in _sessions:
