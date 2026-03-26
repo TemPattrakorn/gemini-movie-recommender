@@ -5,22 +5,37 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
+# Rate limiting imports
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from app import create_movie_chat, movie_assistant_turn
 
 load_dotenv()
 
+# Initialize IP-based rate limiter
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(title="Gemini Movie Recommender API")
 
-_cors = os.environ.get("CORS_ORIGINS", "*")
+# Register rate limiter exception handler
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Configure CORS
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+_cors = os.environ.get("CORS_ORIGINS", FRONTEND_URL)
 _origins = [o.strip() for o in _cors.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins if _origins else ["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -40,15 +55,15 @@ class ChatResponse(BaseModel):
 
 
 async def fetch_streaming_link(title: str) -> str | None:
-    """Helper function to concurrently fetch JustWatch links via TMDB API."""
+    """Fetch JustWatch links concurrently via TMDB API."""
     tmdb_key = os.environ.get("TMDB_API_KEY")
     if not tmdb_key:
         return None
 
-    # Using httpx for fast, async HTTP requests
+    # Async HTTP client
     async with httpx.AsyncClient() as client:
         try:
-            # 1. Search for the movie ID
+            # Search movie ID
             search_url = "https://api.themoviedb.org/3/search/movie"
             search_res = await client.get(search_url, params={"query": title, "api_key": tmdb_key})
             search_res.raise_for_status()
@@ -58,7 +73,7 @@ async def fetch_streaming_link(title: str) -> str | None:
                 return None
             movie_id = search_data["results"][0]["id"]
 
-            # 2. Get watch providers
+            # Fetch watch providers
             providers_url = f"https://api.themoviedb.org/3/movie/{movie_id}/watch/providers"
             providers_res = await client.get(providers_url, params={"api_key": tmdb_key})
             providers_res.raise_for_status()
@@ -66,7 +81,7 @@ async def fetch_streaming_link(title: str) -> str | None:
 
             results = providers_data.get("results", {})
             
-            # Check Thailand rights first, fallback to US
+            # Prioritize TH region, fallback to US
             region_data = results.get("TH") or results.get("US")
 
             if region_data and "link" in region_data:
@@ -83,7 +98,8 @@ async def health() -> dict[str, str]:
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
+@limiter.limit("20/minute") # Limit: 20 requests/minute per IP
+async def chat(request: Request, req: ChatRequest) -> ChatResponse:
     async with _session_lock:
         sid = req.session_id
         if sid and sid in _sessions:
@@ -107,14 +123,14 @@ async def chat(req: ChatRequest) -> ChatResponse:
         async with _session_lock:
             _sessions.pop(sid, None)
             
-        # --- NEW ORCHESTRATION LOGIC ---
+        # TMDB Orchestration
         movies = result.get("movies", [])
         
-        # Fire off all TMDB requests at the exact same time
+        # Fetch streaming links concurrently
         tasks = [fetch_streaming_link(movie["title"]) for movie in movies]
         links = await asyncio.gather(*tasks)
         
-        # Merge the links back into the original Gemini dictionary
+        # Attach links to movie results
         for movie, link in zip(movies, links):
             movie["streamingLink"] = link
 
