@@ -46,7 +46,8 @@ _session_lock = asyncio.Lock()
 
 class ChatRequest(BaseModel):
     session_id: str | None = None
-    message: str = Field(..., min_length=1)
+    # Enforce a 1000-character limit to prevent payload bloat
+    message: str = Field(..., min_length=1, max_length=1000)
 
 
 class ChatResponse(BaseModel):

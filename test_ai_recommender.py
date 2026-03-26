@@ -88,6 +88,23 @@ def test_rate_limiter_blocks_after_20_requests():
         
         error_data = blocked_response.json()
         assert "Rate limit exceeded" in str(error_data)
+        
+def test_payload_size_limit_rejection():
+    """
+    Security Verification: Ensure the API rejects massive payloads to prevent 
+    memory exhaustion and parsing crashes.
+    """
+    # Create a string that is exactly 1 character over the 1000-character limit
+    massive_payload = {"message": "A" * 1001}
+    
+    response = api_client.post("/chat", json=massive_payload)
+    
+    # Verify FastAPI's automatic validation caught it (422 Unprocessable Entity)
+    assert response.status_code == 422, "Security vulnerability: Payload size limit failed!"
+    
+    error_data = response.json()
+    # Verify the error message specifically mentions the length constraint
+    assert "String should have at most 1000 characters" in str(error_data)
 
 # =====================================================================
 # API INTEGRATION & STATE MANAGEMENT TESTS
