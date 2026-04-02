@@ -53,6 +53,9 @@ _session_lock = asyncio.Lock()
 
 class ChatRequest(BaseModel):
     session_id: str | None = None
+    # Add user_id so we can filter their watched movies in Supabase
+    # We default to a zero-UUID so testing still works before the frontend auth is built
+    user_id: str = Field(default="00000000-0000-0000-0000-000000000000")
     # Enforce a 1000-character limit to prevent payload bloat
     message: str = Field(..., min_length=1, max_length=1000)
 
@@ -129,7 +132,8 @@ async def chat(
             _sessions[sid] = chat_session
 
     try:
-        result = await asyncio.to_thread(movie_assistant_turn, chat_session, req.message)
+        # Pass the user_id into the orchestration function!
+        result = await asyncio.to_thread(movie_assistant_turn, chat_session, req.message, req.user_id)
     except Exception as e:
         async with _session_lock:
             _sessions.pop(sid, None)
